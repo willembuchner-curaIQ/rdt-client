@@ -1,12 +1,21 @@
-﻿using Microsoft.Extensions.Logging;
+﻿using Microsoft.Extensions.Caching.Memory;
+using Microsoft.Extensions.Logging;
 using RdtClient.Data.Enums;
 using RdtClient.Data.Models.Data;
 using RdtClient.Data.Models.QBittorrent;
 
 namespace RdtClient.Service.Services;
 
-public class QBittorrent(ILogger<QBittorrent> logger, ISettings settings, Authentication authentication, Torrents torrents, Downloads downloads, ITorrentRunnerState runnerState)
+public class QBittorrent(ILogger<QBittorrent> logger, ISettings settings, Authentication authentication, Torrents torrents, Downloads downloads, ITorrentRunnerState runnerState, IMemoryCache memoryCache)
 {
+    // Sonarr/Radarr poll /torrents/info and /sync/maindata every ~60s under a ~35s client timeout.
+    // TorrentInfo() is O(n) in debrid-account size (per-completed-torrent FUSE/mergerfs directory
+    // walks in GetExistingContentPath + JSON deserialization of Torrent.Files), so the raw endpoint
+    // can take 10-15s and wedge the *arrs. These short-lived caches collapse repeated polls to O(1).
+    private const String TorrentInfoCacheKey = "QBittorrent:TorrentInfo";
+    private static readonly TimeSpan TorrentInfoCacheTtl = TimeSpan.FromSeconds(2);
+    private static readonly TimeSpan ContentPathCacheTtl = TimeSpan.FromMinutes(5);
+
     public async Task<Boolean> AuthLogin(String userName, String password)
     {
         logger.LogDebug("Auth login");
@@ -185,12 +194,35 @@ public class QBittorrent(ILogger<QBittorrent> logger, ISettings settings, Authen
 
     public virtual async Task<IList<TorrentInfo>> TorrentInfo()
     {
+        // Fix (2): short-TTL cache of the whole projection. The *arrs re-derive identical output on
+        // every poll; a 2s cache collapses the near-simultaneous /torrents/info + /sync/maindata bursts
+        // (and the two configured debrid clients) to a single computation.
+        if (memoryCache.TryGetValue(TorrentInfoCacheKey, out IList<TorrentInfo>? cachedInfo) && cachedInfo != null)
+        {
+            return cachedInfo;
+        }
+
+        var results = await BuildTorrentInfo();
+
+        memoryCache.Set(TorrentInfoCacheKey,
+                        results,
+                        new MemoryCacheEntryOptions
+                        {
+                            AbsoluteExpirationRelativeToNow = TorrentInfoCacheTtl
+                        });
+
+        return results;
+    }
+
+    private async Task<IList<TorrentInfo>> BuildTorrentInfo()
+    {
         var savePath = settings.DefaultSavePath;
 
         var results = new List<TorrentInfo>();
 
-        var allTorrents = await torrents.Get();
-        allTorrents = allTorrents.Where(m => m.Type == DownloadType.Torrent).ToList();
+        // Fix (1): push the Type filter into the EF query instead of loading the whole account and
+        // filtering in memory.
+        var allTorrents = await torrents.Get(DownloadType.Torrent);
 
         var prio = 0;
 
@@ -214,7 +246,7 @@ public class QBittorrent(ILogger<QBittorrent> logger, ISettings settings, Authen
                 }
                 else
                 {
-                    var existingContentPath = GetExistingContentPath(downloadPath, torrent);
+                    var existingContentPath = GetExistingContentPathCached(downloadPath, torrent);
 
                     if (!String.IsNullOrWhiteSpace(existingContentPath))
                     {
@@ -372,6 +404,35 @@ public class QBittorrent(ILogger<QBittorrent> logger, ISettings settings, Authen
         }
 
         return torrent.RdName;
+    }
+
+    // Fix (3): memoize the expensive per-torrent directory walk. GetExistingContentPath runs
+    // Directory.EnumerateDirectories + repeated File.Exists against the FUSE/mergerfs pool, uncached,
+    // for every completed torrent on every poll. The result only changes when the torrent's identity,
+    // completion, status, resolved path or file set change, so key the memo on exactly those inputs;
+    // any change produces a new key and forces a fresh walk (self-invalidating). Null results are
+    // cached too, so the common "no pre-existing directory" branch also skips the walk.
+    private String? GetExistingContentPathCached(String downloadPath, Torrent torrent)
+    {
+        var cacheKey = "QBittorrent:ContentPath:" +
+                       $"{torrent.TorrentId}|{torrent.Completed?.UtcTicks}|{(Int32?)torrent.RdStatus}|" +
+                       $"{downloadPath}|{torrent.RdFiles?.GetHashCode() ?? 0}|{torrent.Downloads.Count}";
+
+        if (memoryCache.TryGetValue(cacheKey, out String? cachedPath))
+        {
+            return cachedPath;
+        }
+
+        var contentPath = GetExistingContentPath(downloadPath, torrent);
+
+        memoryCache.Set(cacheKey,
+                        contentPath,
+                        new MemoryCacheEntryOptions
+                        {
+                            AbsoluteExpirationRelativeToNow = ContentPathCacheTtl
+                        });
+
+        return contentPath;
     }
 
     private static String? GetExistingContentPath(String downloadPath, Torrent torrent)

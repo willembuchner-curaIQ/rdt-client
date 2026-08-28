@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging;
 using Moq;
 using System.Text.Json;
@@ -25,7 +26,7 @@ public class QBittorrentTest
         _torrentsMock = new(null!, null!, null!, null!, null!, null!, null!, null!, null!, null!, null!, _settings, _runnerState);
         _authenticationMock = new(null!, null!, null!);
 
-        _qBittorrent = new(_loggerMock.Object, _settings, _authenticationMock.Object, _torrentsMock.Object, null!, _runnerState);
+        _qBittorrent = new(_loggerMock.Object, _settings, _authenticationMock.Object, _torrentsMock.Object, null!, _runnerState, new MemoryCache(new MemoryCacheOptions()));
     }
 
     [Fact]
@@ -50,7 +51,9 @@ public class QBittorrentTest
             }
         };
 
-        _torrentsMock.Setup(m => m.Get()).ReturnsAsync(allTorrents);
+        // Filtering now happens in the EF query, so honor the requested type in the mock.
+        _torrentsMock.Setup(m => m.Get(It.IsAny<DownloadType?>()))
+                     .ReturnsAsync((DownloadType? type) => type == null ? allTorrents : allTorrents.Where(t => t.Type == type).ToList());
 
         // Act
         var result = await _qBittorrent.TorrentInfo();
@@ -88,7 +91,7 @@ public class QBittorrentTest
             }
         };
 
-        _torrentsMock.Setup(m => m.Get()).ReturnsAsync(allTorrents);
+        _torrentsMock.Setup(m => m.Get(It.IsAny<DownloadType?>())).ReturnsAsync(allTorrents);
 
         // Local download is also 100%
         _torrentsMock.Setup(m => m.GetDownloadStats(downloadId)).Returns((0, 1000, 1000));
@@ -128,7 +131,7 @@ public class QBittorrentTest
             }
         };
 
-        _torrentsMock.Setup(m => m.Get()).ReturnsAsync(allTorrents);
+        _torrentsMock.Setup(m => m.Get(It.IsAny<DownloadType?>())).ReturnsAsync(allTorrents);
 
         // Local download is 80%
         _torrentsMock.Setup(m => m.GetDownloadStats(downloadId)).Returns((0, 1000, 800));
@@ -252,7 +255,7 @@ public class QBittorrentTest
                 Type = DownloadType.Torrent
             };
 
-            _torrentsMock.Setup(m => m.Get())
+            _torrentsMock.Setup(m => m.Get(It.IsAny<DownloadType?>()))
                          .ReturnsAsync(new List<Torrent>
                          {
                              torrent
@@ -316,7 +319,7 @@ public class QBittorrentTest
                 Type = DownloadType.Torrent
             };
 
-            _torrentsMock.Setup(m => m.Get())
+            _torrentsMock.Setup(m => m.Get(It.IsAny<DownloadType?>()))
                          .ReturnsAsync(new List<Torrent>
                          {
                              torrent
@@ -385,7 +388,7 @@ public class QBittorrentTest
                 Type = DownloadType.Torrent
             };
 
-            _torrentsMock.Setup(m => m.Get())
+            _torrentsMock.Setup(m => m.Get(It.IsAny<DownloadType?>()))
                          .ReturnsAsync(new List<Torrent>
                          {
                              torrent
@@ -434,7 +437,7 @@ public class QBittorrentTest
             Type = DownloadType.Torrent
         };
 
-        _torrentsMock.Setup(m => m.Get()).ReturnsAsync([torrent]);
+        _torrentsMock.Setup(m => m.Get(It.IsAny<DownloadType?>())).ReturnsAsync([torrent]);
 
         var result = await _qBittorrent.TorrentInfo();
 

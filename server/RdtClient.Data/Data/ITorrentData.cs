@@ -5,7 +5,7 @@ namespace RdtClient.Data.Data;
 
 public interface ITorrentData
 {
-    Task<IList<Torrent>> Get();
+    Task<IList<Torrent>> Get(DownloadType? type = null);
     Task<Torrent?> GetById(Guid torrentId);
     Task<Torrent?> GetByHash(String hash);
     Task<String?> GetPayloadContent(Guid torrentId);
