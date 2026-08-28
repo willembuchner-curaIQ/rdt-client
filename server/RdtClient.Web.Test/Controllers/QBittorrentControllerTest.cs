@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging;
 using Moq;
 using RdtClient.Data.Models.QBittorrent;
@@ -18,7 +19,7 @@ public class QBittorrentControllerTest
     public QBittorrentControllerTest()
     {
         _settings = new();
-        _qBittorrentMock = new(new Mock<ILogger<QBittorrent>>().Object, _settings, null!, null!, null!, new TorrentRunnerState());
+        _qBittorrentMock = new(new Mock<ILogger<QBittorrent>>().Object, _settings, null!, null!, null!, new TorrentRunnerState(), new MemoryCache(new MemoryCacheOptions()));
         _torrentsMock = new(null!, null!, null!, null!, null!, null!, null!, null!, null!, null!, null!, _settings, new TorrentRunnerState());
 
         _controller = new(new Mock<ILogger<QBittorrentController>>().Object,

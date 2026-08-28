@@ -66,9 +66,9 @@ public class Torrents(
         return runnerState.GetStats(downloadId);
     }
 
-    public virtual async Task<IList<Torrent>> Get()
+    public virtual async Task<IList<Torrent>> Get(DownloadType? type = null)
     {
-        var torrents = await torrentData.Get();
+        var torrents = await torrentData.Get(type);
 
         return torrents;
     }

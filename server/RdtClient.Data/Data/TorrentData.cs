@@ -7,11 +7,18 @@ namespace RdtClient.Data.Data;
 
 public class TorrentData(DataContext dataContext, ILogger<TorrentData>? logger = null) : ITorrentData
 {
-    public async Task<IList<Torrent>> Get()
+    public async Task<IList<Torrent>> Get(DownloadType? type = null)
     {
-        var torrents = await BuildTorrentQuery(includePayload: false)
-                             .OrderBy(m => m.Priority ?? 9999)
-                             .ToListAsync();
+        var query = BuildTorrentQuery(includePayload: false);
+
+        // Push the Type filter into SQL instead of loading the whole account and filtering in memory.
+        if (type != null)
+        {
+            query = query.Where(m => m.Type == type);
+        }
+
+        var torrents = await query.OrderBy(m => m.Priority ?? 9999)
+                                  .ToListAsync();
 
         return torrents.OrderBy(m => m.Priority ?? 9999)
                        .ThenBy(m => m.Added)
